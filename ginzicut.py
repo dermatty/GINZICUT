@@ -9,6 +9,8 @@ import time
 __version__ = "0.1"
 TIMEOUT = 180
 CRLF = "\r\n"
+DB_DIR = "./db/"
+
 
 ERR_NOTCAPABLE = '500 command not recognized'
 ERR_CMDSYNTAXERROR = '501 command syntax error (or un-implemented option)'
@@ -158,9 +160,20 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def do_POST(self):
         self.send_response(STATUS_POSTSUCCESSFULL)
-        print(self.article_lines)
+        message_ID = None
+        for a in self.article_lines:
+            if "Message-ID" == a[:10]:
+                message_ID = a.split("Message-ID:")[1].lstrip()
+                break
+        if message_ID:
+            f = open(DB_DIR + message_ID + ".bak", "wb")
+            for a in self.article_lines:
+                a += CRLF
+                f.write(a.encode())
+            f.flush()
+            f.close()
         # for l in lines:
-        #     print(l)
+        #     print(l)'''
 
     def list_to_crlf_str(self, list0):
         strres = ""
