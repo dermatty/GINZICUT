@@ -5,13 +5,13 @@ import time
 import sys
 import os
 
-#
-# The following configuration settings should be pretty self-explanatory, but
-# please let me know if this is not complete or if more information / examples
-# are needed.
-#
+# ginzicut server
+nntp_hostname = "etec.iv.at"
+nntp_port = 7016
 
-
+# server_type
+server_type = "read-write"
+'''
 # what is the maximum number of concurrent connections that should be allowed
 max_connections = 20
 
@@ -133,3 +133,4 @@ def logEvent(msg):
     f = open(log_file, "a")
     f.write("[%s] %s\n" % (time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime()), msg))
     f.close()
+'''
