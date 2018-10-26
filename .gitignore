@@ -1,3 +1,4 @@
+settings_secret.py
 
 *.py[cod]
 *$py.class

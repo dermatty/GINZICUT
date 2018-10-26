@@ -1,5 +1,5 @@
 #!/home/stephan/.virtualenvs/nntp/bin/python
-import settings
+import settings_secret as settings
 import socketserver
 import re
 import signal
@@ -94,7 +94,7 @@ def sighandler(signum, frame):
 
 class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
-    commands = ("CAPABILITIES", "ARTICLE", "BODY", "QUIT", "POST")
+    commands = ("CAPABILITIES", "ARTICLE", "BODY", "QUIT", "POST", "STAT")
     ''' 'BODY', 'HEAD', 'STAT', 'GROUP', 'LIST', 'POST',
                 'HELP', 'LAST', 'NEWGROUPS', 'NEWNEWS', 'NEXT', 'QUIT',
                 'MODE', 'XOVER', 'XPAT', 'LISTGROUP', 'XGTITLE', 'XHDR',
@@ -187,17 +187,30 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             self.send_response(c)
 
     def do_ARTICLE(self):
-        article_number = "123"
-        message_id = "<lqsoxd95em.ach@news.spam.egg>"
-        response = STATUS_ARTICLE % (article_number, message_id)
-        self.send_response("%s\r\n%s\r\n\r\n%s\r\n." % (response, self.list_to_crlf_str(ART0_HEAD),
-                                                        self.list_to_crlf_str(ART0_BODY)))
+        param1 = self.params[1]
+        message_id, article_head, article_body = backend_get_article(param1)
+        if not article_head:
+            self.send_response(ERR_NOSUCHARTICLENUM)
+        else:
+            response = STATUS_ARTICLE % (1, message_id)
+            self.send_response("%s\r\n%s\r\n\r\n%s\r\n." % (response, article_head, article_body))
 
     def do_BODY(self):
-        article_number = "123"
-        message_id = "<lqsoxd95em.ach@news.spam.egg>"
-        response = STATUS_BODY % (article_number, message_id)
-        self.send_response("%s\r\n%s\r\n." % (response, self.list_to_crlf_str(ART0_BODY)))
+        param1 = self.params[1]
+        message_id, article_head, article_body = backend_get_article(param1)
+        if not article_head:
+            self.send_response(ERR_NOSUCHARTICLENUM)
+        else:
+            response = STATUS_BODY % (1, message_id)
+            self.send_response("%s\r\n%s\r\n." % (response, article_body))
+
+    def do_STAT(self):
+        param1 = self.params[1]
+        art_exists = backend_stat(param1)
+        if not art_exists:
+            self.send_response(ERR_NOSUCHARTICLENUM)
+        else:
+            self.send_response(STATUS_STAT % (1, param1))
 
     def do_QUIT(self):
         self.terminated = True
@@ -207,6 +220,59 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         msg0 = message + "\r\n"
         self.wfile.write(msg0.encode())
         self.wfile.flush()
+
+
+def list_to_crlf_str(list0):
+    strres = ""
+    for l in list0:
+        strres += l + CRLF
+    return strres
+
+
+def backend_stat(id):
+    id0 = id.rstrip().lstrip()
+    if id0[0] != "<" or id0[-1] != ">":
+        return None
+    # first search in db directory:
+    try:
+        f = open(DB_DIR + id0, "r")
+    except FileNotFoundError:
+        return None
+    f.close()
+    return 1
+
+
+def backend_get_article(id):
+    id0 = id.rstrip().lstrip()
+    if id0[0] != "<" or id0[-1] != ">":
+        return id0, None, None
+    # first search in db directory:
+    try:
+        f = open(DB_DIR + id0, "r")
+    except FileNotFoundError:
+        return id0, None, None
+    art_head = []
+    art_body = []
+    art = f.readlines()
+    headers = ("Date", "From", "Message-ID", "Newsgroups", "Path", "Subject",
+               "Approved", "Archive", "Control", "Distribution", "Expires", "Followup-To",
+               "Injection-Date", "Injection-Info", "Organization", "References",
+               "Summary", "Supersedes", "User-Agent", "Xref", "Lines", "Sender")
+
+    for a in art:
+        a0 = a.rstrip("\n")
+        found_in_headers = False
+        for h in headers:
+            h0 = h + ":"
+            if a0[:len(h)+1] == h0:
+                art_head.append(a0)
+                found_in_headers = True
+                break
+        if not found_in_headers:
+            art_body.append(a0)
+
+    f.close()
+    return id0, list_to_crlf_str(art_head), list_to_crlf_str(art_body)
 
 
 if __name__ == '__main__':

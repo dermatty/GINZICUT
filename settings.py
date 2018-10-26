@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+##!/usr/bin/env python
 # Copyright (c) 2002 Joao Prado Maia. See the LICENSE file for more information.
 # $Id: settings.py,v 1.18 2004-08-01 01:03:22 jpm Exp $
 import time
@@ -11,6 +11,15 @@ nntp_port = 7016
 
 # server_type
 server_type = "read-write"
+
+# forwarding
+do_forwarding = True
+forward_server_name = "abcd"
+forward_server_user = "xxxx"
+forward_server_pass = "secret"
+forward_server_port = 563 
+forward_server_ssl = True
+
 '''
 # what is the maximum number of concurrent connections that should be allowed
 max_connections = 20

@@ -70,7 +70,14 @@ def _getlongresp_monkey(self, file=None):
 
 s = nntplib.NNTP('etec.iv.at', port=7016)
 
-art0 = "<lqsoxd95em.ach@news.spam.egg>.bak"
+art0 = "<lqsoxd95em.ach@news.spam.egg>"
+
+resp, number, message_id = s.stat(art0)
+print(resp, number, message_id)
+
+#respm, info = s.body(art0)
+#print(info)
+
 
 '''art0 = "<lqsoxd95em.ach@news.spam.egg>"
 resp, info = s.body(art0)
@@ -81,8 +88,8 @@ for inf in info.lines:
     print("***********")
     print(inf)'''
 
-art0 = "./db/<lqsoxd95em.ach@news.spam.egg>.bak"
+'''art0 = "./db/<lqsoxd95em.ach@news.spam.egg>.bak"
 f = open(art0, 'rb')
-s.post(f)
+s.post(f)'''
 
 s.quit()
