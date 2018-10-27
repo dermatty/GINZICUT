@@ -1,4 +1,4 @@
-import nntplib
+import nntplib, time
 
 CRLF = b'\r\n'
 
@@ -71,10 +71,12 @@ def _getlongresp_monkey(self, file=None):
 s = nntplib.NNTP('etec.iv.at', port=7016)
 
 art0 = "<lqsoxd95em.ach@news.spam.egg>"
+art1 = "<GSB4C7JMhS6Uvzh7p6JX@JBinUp.local>"
+resp, info = s.article(art1)
+print(resp, info)
 
-resp, number, message_id = s.stat(art0)
-print(resp, number, message_id)
-
+while True:
+        time.sleep(1)
 #respm, info = s.body(art0)
 #print(info)
 

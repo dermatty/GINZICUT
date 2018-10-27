@@ -8,6 +8,7 @@ import os
 # ginzicut server
 nntp_hostname = "etec.iv.at"
 nntp_port = 7016
+max_connections = 30
 
 # server_type
 server_type = "read-write"

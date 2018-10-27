@@ -5,12 +5,14 @@ import re
 import signal
 import sys
 import time
+import ssl
+import nntplib
 
 __version__ = "0.1"
 TIMEOUT = 180
 CRLF = "\r\n"
 DB_DIR = "./db/"
-
+forward_nntp = []
 
 ERR_NOTCAPABLE = '500 command not recognized'
 ERR_CMDSYNTAXERROR = '501 command syntax error (or un-implemented option)'
@@ -62,31 +64,18 @@ STATUS_AUTH_CONTINUE = '381 More authentication information required'
 STATUS_SERVER_VERSION = '200 Ginzicut %s' % (__version__)
 STATUS_CAPABILITIES = "101 Capabilities"
 
-# the currently supported overview headers
-overview_headers = ('Subject', 'From', 'Date', 'Message-ID', 'References', 'Bytes', 'Lines', 'Xref')
-
-# we don't need to create the regular expression objects for every request, 
-# so let's create them just once and re-use as needed
-newsgroups_regexp = re.compile("^Newsgroups:(.*)", re.M)
-contenttype_regexp = re.compile("^Content-Type:(.*);", re.M)
-authinfo_regexp = re.compile("AUTHINFO PASS")
-
-ART0_HEAD = ("Path: news.myisp.se!newsfeed.internetmci.com!news.spam.egg",
-             "From: user@spam.egg",
-             "Newsgroups: comp.lang.python",
-             "Subject: Re: Where's the bacon?",
-             "Date: 17 Jul 1999 09:25:53 -0400",
-             "Lines: 12",
-             "Sender: user@spam.egg",
-             "Message-ID: <lqsoxd95em.ach@news.spam.egg>",
-             "References: <199907152100.RAA14304@foobar.spam.egg>",
-             "Xref: news.spam.egg comp.lang.python:14304")
-ART0_BODY = ("Fredrik wrote:",
-             '> Havent got a clue. Maybe someone else knows more.')
+headers = ("Date", "From", "Message-ID", "Newsgroups", "Path", "Subject", "Bytes"
+           "Approved", "Archive", "Control", "Distribution", "Expires", "Followup-To",
+           "Injection-Date", "Injection-Info", "Organization", "References",
+           "Summary", "Supersedes", "User-Agent", "Xref", "Lines", "Sender", "Content-Type")
 
 
 def sighandler(signum, frame):
     global server
+    global forward_nntp
+    for fo in forward_nntp:
+        if fo:
+            fo.quit()
     server.socket.close()
     time.sleep(1)
     sys.exit(0)
@@ -103,11 +92,41 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
     extensions = ('XOVER', 'XPAT', 'LISTGROUP', 'XGTITLE', 'XHDR', 'MODE',
                   'OVER', 'HDR', 'AUTHINFO', 'XROVER', 'XVERSION')
     terminated = False
+    nntpobj = None
+
+    def open_connection(self):
+        global forward_nntp
+        if not settings.do_forwarding:
+            forward_nntp0 = None
+            return None
+        sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        if settings.forward_server_ssl:
+            nntp_obj = nntplib.NNTP_SSL(settings.forward_server_url, user=settings.forward_server_user,
+                                        password=settings.forward_server_pass, ssl_context=sslcontext,
+                                        port=settings.forward_server_port, readermode=True, timeout=5)
+        else:
+            nntp_obj = nntplib.NNTP(settings.forward_server_url, user=settings.forward_server_user,
+                                    password=settings.forward_server_pass, ssl_context=sslcontext,
+                                    port=settings.forward_server_port, readermode=True, timeout=5)
+        forward_nntp0 = nntp_obj
+        forward_nntp.append(forward_nntp0)
+        return nntp_obj
+
+    def close_connection(self):
+        global forward_nntp
+        if self.nntpobj:
+            try:
+                forward_nntp.remove(self.nntpobj)
+            except Exception as e:
+                print(str(e))
+            self.nntpobj.quit()
 
     def handle_timeout(self, signum, frame):
         self.terminated = True
 
     def handle(self):
+        self.nntpobj = self.open_connection()
+
         if settings.server_type == 'read-only':
             self.send_response(STATUS_READYNOPOST % (settings.nntp_hostname, __version__))
         else:
@@ -175,10 +194,13 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         # for l in lines:
         #     print(l)'''
 
-    def list_to_crlf_str(self, list0):
+    def list_to_crlf_str(self, list0, decoding=False):
         strres = ""
         for l in list0:
-            strres += l + CRLF
+            if decoding:
+                strres += l.decode() + CRLF
+            else:
+                strres += l + CRLF
         return strres
 
     def do_CAPABILITIES(self):
@@ -188,7 +210,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def do_ARTICLE(self):
         param1 = self.params[1]
-        message_id, article_head, article_body = backend_get_article(param1)
+        message_id, article_head, article_body = self.backend_get_article(param1)
         if not article_head:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
@@ -197,7 +219,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def do_BODY(self):
         param1 = self.params[1]
-        message_id, article_head, article_body = backend_get_article(param1)
+        message_id, article_head, article_body = self.backend_get_article(param1)
         if not article_head:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
@@ -206,7 +228,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def do_STAT(self):
         param1 = self.params[1]
-        art_exists = backend_stat(param1)
+        art_exists = self.backend_stat(param1)
         if not art_exists:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
@@ -221,58 +243,127 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         self.wfile.write(msg0.encode())
         self.wfile.flush()
 
+    def retry_connect(self):
+        global forward_nntp
+        try:
+            forward_nntp.remove(self.nntpobj)
+            self.nntpobj.quit()
+        except Exception as e:
+            print(str(e))
+        idx = 0
+        while idx < 5:
+            self.nntpobj = self.open_connection()
+            if self.nntpobj:
+                return True
+            time.sleep(5)
+            idx += 1
+        return False
 
-def list_to_crlf_str(list0):
-    strres = ""
-    for l in list0:
-        strres += l + CRLF
-    return strres
-
-
-def backend_stat(id):
-    id0 = id.rstrip().lstrip()
-    if id0[0] != "<" or id0[-1] != ">":
-        return None
-    # first search in db directory:
-    try:
-        f = open(DB_DIR + id0, "r")
-    except FileNotFoundError:
-        return None
-    f.close()
-    return 1
-
-
-def backend_get_article(id):
-    id0 = id.rstrip().lstrip()
-    if id0[0] != "<" or id0[-1] != ">":
-        return id0, None, None
-    # first search in db directory:
-    try:
-        f = open(DB_DIR + id0, "r")
-    except FileNotFoundError:
-        return id0, None, None
-    art_head = []
-    art_body = []
-    art = f.readlines()
-    headers = ("Date", "From", "Message-ID", "Newsgroups", "Path", "Subject",
-               "Approved", "Archive", "Control", "Distribution", "Expires", "Followup-To",
-               "Injection-Date", "Injection-Info", "Organization", "References",
-               "Summary", "Supersedes", "User-Agent", "Xref", "Lines", "Sender")
-
-    for a in art:
-        a0 = a.rstrip("\n")
-        found_in_headers = False
-        for h in headers:
-            h0 = h + ":"
-            if a0[:len(h)+1] == h0:
-                art_head.append(a0)
-                found_in_headers = True
+    def forward_get_article(self, id):
+        idx = 0
+        while idx < 5:
+            art_head = None
+            art_body = None
+            try:
+                # head
+                resp, info = self.nntpobj.head(id)
+                if resp[:3] != "221":
+                    break
+                else:
+                    info0 = [inf for inf in info.lines]
+                    art_head = info0
+                # body
+                resp, info = self.nntpobj.body(id)
+                if resp[:3] != "222":
+                    break
+                else:
+                    info0 = [inf for inf in info.lines]
+                    art_body = info0
                 break
-        if not found_in_headers:
-            art_body.append(a0)
+            except nntplib.NNTPTemporaryError:
+                break
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                pass
+            retry_success = self.retry_connect()
+            if not retry_success:
+                break
+            idx += 1
+        return art_head, art_body
 
-    f.close()
-    return id0, list_to_crlf_str(art_head), list_to_crlf_str(art_body)
+    def backend_stat(self, id):
+        id0 = id.rstrip().lstrip()
+        if id0[0] != "<" or id0[-1] != ">":
+            return None
+        # first search in db directory:
+        try:
+            f = open(DB_DIR + id0, "r")
+        except FileNotFoundError:
+            return None
+        f.close()
+        return 1
+
+    def backend_get_article(self, id):
+        id0 = id.rstrip().lstrip()
+        #if id0[0] != "<" or id0[-1] != ">":
+        #    return id0, None, None
+        # first search in db directory:
+        art_found_in_db = True
+        try:
+            f = open(DB_DIR + id0, "r")
+        except FileNotFoundError:
+            art_found_in_db = False
+        if art_found_in_db:
+            art_head = []
+            art_body = []
+            art = f.readlines()
+
+            for a in art:
+                a0 = a.rstrip("\n")
+                found_in_headers = False
+                for h in headers:
+                    h0 = h + ":"
+                    if a0[:len(h)+1] == h0:
+                        art_head.append(a0)
+                        found_in_headers = True
+                        break
+                if not found_in_headers:
+                    art_body.append(a0)
+            f.close()
+            print("found in db!")
+            return id0, self.list_to_crlf_str(art_head), self.list_to_crlf_str(art_body)
+        else:
+            if settings.do_forwarding:
+                art_head, art_body = self.forward_get_article(id0)
+                if not art_head:
+                    return id0, None, None
+                print("found on forwarding news server!")
+                art_body0 = ""
+                for ab in art_body:
+                    ab0 = "".join(chr(x) for x in ab)
+                    art_body0 += ab0 + CRLF
+                art_head0 = self.list_to_crlf_str(art_head, decoding=True)
+                print(art_head0)
+                f = open(DB_DIR + id0, "wb")
+                ah0 = ""
+                for ah in art_head:
+                    ah0 += ah.decode() + CRLF
+                f.write(ah0.encode())
+                ab0 = ""
+                for ab in art_body:
+                    ab0 += "".join(chr(x) for x in ab) + CRLF
+                f.write(ab0.encode())
+                f.flush()
+                f.close()
+                return id0, art_head0, art_body0
+        return id0, None, None
+
+
+class NNTPServer(socketserver.ForkingTCPServer):
+    allow_reuse_address = True
+    if settings.max_connections:
+        max_children = settings.max_connections
 
 
 if __name__ == '__main__':
@@ -280,6 +371,5 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, sighandler)
     signal.signal(signal.SIGTERM, sighandler)
 
-    socketserver.ForkingTCPServer.allow_reuse_address = True
-    server = socketserver.ForkingTCPServer((settings.nntp_hostname, settings.nntp_port), NNTPRequestHandler)
+    server = NNTPServer((settings.nntp_hostname, settings.nntp_port), NNTPRequestHandler)
     server.serve_forever()
