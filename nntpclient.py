@@ -34,21 +34,20 @@ class Nntpthread(Thread):
 
         def run(self):
                 global bytesdownloaded
-                i = 1
+                bytesdl = 0
                 for a in self.artlist:
                         try:
                                 resp, info = self.s.body(a)
                                 print(resp)
-                                info0 = [inf for inf in info.lines]
-                                with self.lock:
-                                        bytesdownloaded += sum(len(i) for i in info0)
-                                print(i, a, " ---> ", resp)
-                                i += 1
+                                bytesdl += sum(len(i) for i in info.lines)
+                                # print(i, a, " ---> ", resp)
                         except Exception as e:
                                 print("*" * 30, a, e)
+                with self.lock:
+                        bytesdownloaded += bytesdl
 
 
-maxconn = 8
+maxconn = 10
 clientthreads = []
 
 lock = threading.Lock()
