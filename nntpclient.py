@@ -1,97 +1,71 @@
-import nntplib, time
+import nntplib, time, sys
+import threading
+from threading import Thread
 
-CRLF = b'\r\n'
-
-_LONGRESP = {
-    '100',   # HELP
-    '101',   # CAPABILITIES
-    '211',   # LISTGROUP   (also not multi-line with GROUP)
-    '215',   # LIST
-    '220',   # ARTICLE
-    '221',   # HEAD, XHDR
-    '222',   # BODY
-    '224',   # OVER, XOVER
-    '225',   # HDR
-    '230',   # NEWNEWS
-    '231',   # NEWGROUPS
-    '282',   # XGTITLE
-}
-
-
-def _getlongresp_monkey(self, file=None):
-        """Internal: get a response plus following text from the server.
-        Raise various errors if the response indicates an error.
-        Returns a (response, lines) tuple where `response` is a unicode
-        string and `lines` is a list of bytes objects.
-        If `file` is a file-like object, it must be open in binary mode.
-        """
-
-        openedFile = None
+f = open("articles.txt", "r")
+lines = f.readlines()
+f.close()
+artlist = []
+dllist = []
+print("... reading article list")
+for l1 in lines:
         try:
-            # If a string was passed then open a file with that name
-            if isinstance(file, (str, bytes)):
-                openedFile = file = open(file, "wb")
+                la = l1.rstrip().lstrip()
+                ll = la.split("<segment bytes=")[1]
+                l0 = la.split(">")[1]
+                l0 = l0.split("</segment")[0]
+                artlist.append(l0)
+                dllist.append(False)
+        except:
+                pass
 
-            resp = self._getresp()
-            if resp[:3] not in _LONGRESP:
-                raise "OASCH!"
+print("done", len(artlist))
 
-            lines = []
-            if file is not None:
-                # XXX lines = None instead?
-                terminators = (b'.' + CRLF, b'.\n')
-                while 1:
-                    print("waiting")
-                    line = self._getline(False)
-                    if line in terminators:
-                        break
-                    if line.startswith(b'..'):
-                        line = line[1:]
-                    file.write(line)
-            else:
-                terminator = b'.'
-                while 1:
-                    line = self._getline()
-                    if line == terminator:
-                        break
-                    if line.startswith(b'..'):
-                        line = line[1:]
-                    lines.append(line)
-                    print(line)
-        finally:
-            # If this method created the file, then it must close it
-            if openedFile:
-                openedFile.close()
-
-        return resp, lines
+bytesdownloaded = 0
 
 
-# nntplib._getlongresp = _getlongresp_monkey
+class Nntpthread(Thread):
+        def __init__(self, artlist, lock):
+                Thread.__init__(self)
+                self.daemon = True
+                self.lock = lock
+                self.artlist = artlist
+                self.s = nntplib.NNTP('etec.iv.at', port=7016)
 
-s = nntplib.NNTP('etec.iv.at', port=7016)
+        def run(self):
+                global bytesdownloaded
+                i = 1
+                for a in self.artlist:
+                        try:
+                                resp, info = self.s.body(a)
+                                print(resp)
+                                info0 = [inf for inf in info.lines]
+                                with self.lock:
+                                        bytesdownloaded += sum(len(i) for i in info0)
+                                print(i, a, " ---> ", resp)
+                                i += 1
+                        except Exception as e:
+                                print("*" * 30, a, e)
 
-art0 = "<lqsoxd95em.ach@news.spam.egg>"
-art1 = "<GSB4C7JMhS6Uvzh7p6JX@JBinUp.local>"
-resp, info = s.article(art1)
-print(resp, info)
 
-while True:
-        time.sleep(1)
-#respm, info = s.body(art0)
-#print(info)
+maxconn = 8
+clientthreads = []
 
+lock = threading.Lock()
+for i in range(maxconn):
+        nntp = Nntpthread(artlist, lock)
+        clientthreads.append(nntp)
 
-'''art0 = "<lqsoxd95em.ach@news.spam.egg>"
-resp, info = s.body(art0)
-print(resp)
-print("number: ", info.number)
-print("message_id", info.message_id)
-for inf in info.lines:
-    print("***********")
-    print(inf)'''
+t0 = time.time()
+for nntp in clientthreads:
+        nntp.start()
+for n in clientthreads:
+        n.join()
 
-'''art0 = "./db/<lqsoxd95em.ach@news.spam.egg>.bak"
-f = open(art0, 'rb')
-s.post(f)'''
+bytespersec = bytesdownloaded / (time.time() - t0)
+kbpersec = bytespersec / 1024
+mbpersec = kbpersec / 1024
+print("Mbit/sec:", int(mbpersec * 8))
 
-s.quit()
+for n in clientthreads:
+        n.s.quit()

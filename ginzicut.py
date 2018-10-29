@@ -1,18 +1,21 @@
 #!/home/stephan/.virtualenvs/nntp/bin/python
 import settings_secret as settings
 import socketserver
-import re
+import dill
 import signal
 import sys
 import time
 import ssl
 import nntplib
+from pymemcache.client.base import Client as pymemClient
+import json
 
 __version__ = "0.1"
 TIMEOUT = 180
 CRLF = "\r\n"
 DB_DIR = "./db/"
 forward_nntp = []
+use_memcached = True
 
 ERR_NOTCAPABLE = '500 command not recognized'
 ERR_CMDSYNTAXERROR = '501 command syntax error (or un-implemented option)'
@@ -81,6 +84,9 @@ def sighandler(signum, frame):
     sys.exit(0)
 
 
+bodycount = 0
+
+
 class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     commands = ("CAPABILITIES", "ARTICLE", "BODY", "QUIT", "POST", "STAT")
@@ -93,6 +99,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                   'OVER', 'HDR', 'AUTHINFO', 'XROVER', 'XVERSION')
     terminated = False
     nntpobj = None
+    timeout = TIMEOUT
 
     def open_connection(self):
         global forward_nntp
@@ -125,7 +132,14 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         self.terminated = True
 
     def handle(self):
-        self.nntpobj = self.open_connection()
+        global use_memcached
+
+        if use_memcached:
+            try:
+                self.pymemclient = pymemClient(('localhost', 11211))
+            except Exception as e:
+                print("memcached connection error: " + str(e))
+                use_memcached = False
 
         if settings.server_type == 'read-only':
             self.send_response(STATUS_READYNOPOST % (settings.nntp_hostname, __version__))
@@ -139,15 +153,15 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             if not self.sending_article:
                 self.article_lines = []
 
-            signal.signal(signal.SIGALRM, self.handle_timeout)
-            signal.alarm(TIMEOUT)
+            # signal.signal(signal.SIGALRM, self.handle_timeout)
+            # signal.alarm(TIMEOUT)
 
             try:
                 self.inputline = self.rfile.readline()
             except IOError:
                 continue
 
-            signal.alarm(0)
+            # signal.alarm(0)
 
             if not self.sending_article:
                 cmd = self.inputline.decode().strip()
@@ -158,7 +172,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                 cmd0 = "posting ...", cmd
 
             if cmd0:
-                print(cmd0)
+                # print(cmd0)
                 if cmd0 == "POST":
                     self.sending_article = True
                     self.send_response(STATUS_SENDARTICLE)
@@ -171,11 +185,10 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                         self.article_lines.append(cmd.rstrip())
                     else:
                         if cmd0 in self.commands:
+                            # eval("self.do_" + cmd0 + "()")
                             getattr(self, "do_" + cmd0)()
                         else:
                             self.send_response(ERR_NOTCAPABLE)
-
-            time.sleep(0.02)
 
     def do_POST(self):
         self.send_response(STATUS_POSTSUCCESSFULL)
@@ -195,13 +208,14 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         #     print(l)'''
 
     def list_to_crlf_str(self, list0, decoding=False):
-        strres = ""
-        for l in list0:
-            if decoding:
-                strres += l.decode() + CRLF
-            else:
-                strres += l + CRLF
-        return strres
+        if decoding:
+            strres = ""
+            for l in list0:
+                if decoding:
+                    strres += l.decode() + CRLF
+            return strres
+        else:
+            return CRLF.join(list0)
 
     def do_CAPABILITIES(self):
         cap = (STATUS_CAPABILITIES, "VERSION 2", "ARTICLE", ".")
@@ -218,11 +232,14 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             self.send_response("%s\r\n%s\r\n\r\n%s\r\n." % (response, article_head, article_body))
 
     def do_BODY(self):
+        global bodycount
         param1 = self.params[1]
         message_id, article_head, article_body = self.backend_get_article(param1)
         if not article_head:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
+            bodycount += 1
+            print("BODY ", param1, bodycount)
             response = STATUS_BODY % (1, message_id)
             self.send_response("%s\r\n%s\r\n." % (response, article_body))
 
@@ -261,6 +278,8 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def forward_get_article(self, id):
         idx = 0
+        if not self.nntpobj:
+            self.retry_connect()
         while idx < 5:
             art_head = None
             art_body = None
@@ -294,9 +313,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def backend_stat(self, id):
         id0 = id.rstrip().lstrip()
-        if id0[0] != "<" or id0[-1] != ">":
-            return None
-        # first search in db directory:
+        # just look in db directory
         try:
             f = open(DB_DIR + id0, "r")
         except FileNotFoundError:
@@ -306,9 +323,25 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def backend_get_article(self, id):
         id0 = id.rstrip().lstrip()
-        #if id0[0] != "<" or id0[-1] != ">":
-        #    return id0, None, None
-        # first search in db directory:
+        if id0[0] != "<":
+            id0 = "<" + id0
+        if id[0] != ">":
+            id0 += ">"
+        if use_memcached:
+            # first search in memcached
+            mc_key_head = id0 + ":head"
+            mc_key_body = id0 + ":body"
+            try:
+                head0 = dill.loads(self.pymemclient.get(mc_key_head))
+                body0 = dill.loads(self.pymemclient.get(mc_key_body))
+                conv_head = self.list_to_crlf_str(head0)
+                conv_body = self.list_to_crlf_str(body0)
+                # print("found in memcached")
+                return id0, conv_head, conv_body
+            except Exception as e:
+                # print(str(e), "not found in memcached")
+                pass
+        # then in in db directory:
         art_found_in_db = True
         try:
             f = open(DB_DIR + id0, "r")
@@ -332,19 +365,40 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                     art_body.append(a0)
             f.close()
             print("found in db!")
-            return id0, self.list_to_crlf_str(art_head), self.list_to_crlf_str(art_body)
+            conv_head = self.list_to_crlf_str(art_head)
+            conv_body = self.list_to_crlf_str(art_body)
+            if use_memcached:
+                # save in cache
+                try:
+                    art_body_dill = dill.dumps(art_body)
+                    art_head_dill = dill.dumps(art_head)
+                    self.pymemclient.set(id0 + ":head", art_head_dill)
+                    self.pymemclient.set(id0 + ":body", art_body_dill)
+                except Exception as e:
+                    pass
+            return id0, conv_head, conv_body
         else:
             if settings.do_forwarding:
                 art_head, art_body = self.forward_get_article(id0)
                 if not art_head:
                     return id0, None, None
                 print("found on forwarding news server!")
+                # convert b'' to CRLF separated string
                 art_body0 = ""
                 for ab in art_body:
                     ab0 = "".join(chr(x) for x in ab)
                     art_body0 += ab0 + CRLF
                 art_head0 = self.list_to_crlf_str(art_head, decoding=True)
-                print(art_head0)
+                if use_memcached:
+                    # save in cache
+                    try:
+                        art_body_dill = dill.dumps(art_body0)
+                        art_head_dill = dill.dumps(art_head0)
+                        self.pymemclient.set(id0 + ":head", art_head_dill)
+                        self.pymemclient.set(id0 + ":body", art_body_dill)
+                    except Exception as e:
+                        pass
+                # write to file in db dir
                 f = open(DB_DIR + id0, "wb")
                 ah0 = ""
                 for ah in art_head:
@@ -360,8 +414,23 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         return id0, None, None
 
 
+def json_serializer(key, value):
+    if type(value) == str:
+        return value, 1
+    return json.dumps(value), 2
+
+
+def json_deserializer(key, value, flags):
+    if flags == 1:
+        return value
+    if flags == 2:
+        return json.loads(value)
+    raise Exception("Unknown serialization format")
+
+
 class NNTPServer(socketserver.ForkingTCPServer):
     allow_reuse_address = True
+    request_queue_size = 128
     if settings.max_connections:
         max_children = settings.max_connections
 
