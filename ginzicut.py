@@ -101,7 +101,8 @@ STATUS_CAPABILITIES = "101 Capabilities"
 headers = ("Date", "From", "Message-ID", "Newsgroups", "Path", "Subject", "Bytes"
            "Approved", "Archive", "Control", "Distribution", "Expires", "Followup-To",
            "Injection-Date", "Injection-Info", "Organization", "References",
-           "Summary", "Supersedes", "User-Agent", "Xref", "Lines", "Sender", "Content-Type")
+           "Summary", "Supersedes", "User-Agent", "Xref", "Lines", "Sender", "Content-Type",
+           "X-Newsposter", "X-Received-Bytes", "X-Received-Body-CRC")
 
 
 def sighandler(signum, frame):
@@ -302,53 +303,47 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             try:
                 if onlybody:
                     body0 = dill.loads(self.pymemclient.get(mc_key_body))
-                    conv_body = CRLF.join(body0)
-                    return id0, None, conv_body
+                    return id0, None, body0
                 elif onlyhead:
                     head0 = dill.loads(self.pymemclient.get(mc_key_head))
-                    conv_head = CRLF.join(head0)
-                    return id0, conv_head, None
+                    return id0, head0, None
                 else:
                     head0 = dill.loads(self.pymemclient.get(mc_key_head))
                     body0 = dill.loads(self.pymemclient.get(mc_key_body))
-                    conv_head = CRLF.join(head0)
-                    conv_body = CRLF.join(body0)
-                    # print("found in memcached")
-                    return id0, conv_head, conv_body
+                    return id0, head0, body0
             except Exception as e:
                 # print(str(e), "not found in memcached")
                 pass
         # then in in db directory:
         art_found_in_db = True
         try:
-            f = open(DB_DIR + id0, "r")
+            f = open(DB_DIR + id0, "rb")
         except FileNotFoundError:
             art_found_in_db = False
         if art_found_in_db:
+            print("reading from db")
+            data01 = dill.loads(f.read())
             art_head = []
             art_body = []
-            art = f.readlines()
+            separator_found = False
+            for d0 in data01:
+                if d0 == "***---sep---***":
+                    separator_found = True
+                    continue
+                if not separator_found:
+                    art_head.append(d0.encode("latin-1"))
+                else:
+                    art_body.append(d0.encode("latin-1"))
 
-            for a in art:
-                a0 = a.rstrip("\n")
-                found_in_headers = False
-                for h in headers:
-                    h0 = h + ":"
-                    if a0[:len(h)+1] == h0:
-                        art_head.append(a0)
-                        found_in_headers = True
-                        break
-                if not found_in_headers:
-                    art_body.append(a0)
             f.close()
             print("found in db!")
-            conv_head = self.list_to_crlf_str(art_head)
-            conv_body = self.list_to_crlf_str(art_body)
+            conv_head = self.bytelist_to_latin_crlf_str(art_head)
+            conv_body = self.bytelist_to_latin_crlf_str(art_body)
             if use_memcached:
                 # save in cache
                 try:
-                    art_body_dill = dill.dumps(art_body)
-                    art_head_dill = dill.dumps(art_head)
+                    art_body_dill = dill.dumps(conv_body)
+                    art_head_dill = dill.dumps(conv_head)
                     self.pymemclient.set(id0 + ":head", art_head_dill)
                     self.pymemclient.set(id0 + ":body", art_body_dill)
                 except Exception as e:
@@ -361,11 +356,8 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                     return id0, None, None
                 print("found on forwarding news server!")
                 # convert b'' to CRLF separated string
-                art_body0 = ""
-                for ab in art_body:
-                    ab0 = "".join(chr(x) for x in ab)
-                    art_body0 += ab0 + CRLF
-                art_head0 = self.list_to_crlf_str(art_head, decoding=True)
+                art_body0 = self.bytelist_to_latin_crlf_str(art_body)
+                art_head0 = self.bytelist_to_latin_crlf_str(art_head)
                 if use_memcached:
                     # save in cache
                     try:
@@ -377,19 +369,21 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                         pass
                 # write to file in db dir
                 f = open(DB_DIR + id0, "wb")
-                ah0 = ""
-                for ah in art_head:
-                    ah0 += ah.decode() + CRLF
-                f.write(ah0.encode())
-                ab0 = ""
-                for ab in art_body:
-                    ab0 += "".join(chr(x) for x in ab) + CRLF
-                f.write(ab0.encode())
+                data0 = [ah.decode("latin-1") for ah in art_head]
+                data0.append("***---sep---***")
+                data0.extend([ab.decode("latin-1") for ab in art_body])
+                f.write(dill.dumps(data0))
                 f.flush()
                 f.close()
                 return id0, art_head0, art_body0
         return id0, None, None
 
+    def bytelist_to_latin_crlf_str(self, bytelist0):
+        s = ""
+        for b in bytelist0:
+            s += b.decode("latin-1") + CRLF 
+        return s
+            
     # NNTP responses
 
     def do_POST(self):
@@ -403,7 +397,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             f = open(DB_DIR + message_ID + ".bak", "wb")
             for a in self.article_lines:
                 a += CRLF
-                f.write(a.encode())
+                f.write(a.encode("latin-1"))
             f.flush()
             f.close()
 
@@ -459,7 +453,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def send_response(self, message):
         msg0 = message + "\r\n"
-        self.wfile.write(msg0.encode())
+        self.wfile.write(msg0.encode("latin-1"))
         self.wfile.flush()
 
 

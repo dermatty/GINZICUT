@@ -1,6 +1,8 @@
 import nntplib, time, sys
 import threading
 from threading import Thread
+import settings_secret as settings
+import ssl
 
 f = open("articles.txt", "r")
 lines = f.readlines()
@@ -21,8 +23,11 @@ for l1 in lines:
 
 print("done", len(artlist))
 
-bytesdownloaded = 0
+# artlist = ["<part9of131.mVhZUeNfjvVQg2z1CJLq@powerpost2000AA.local>"]
 
+bytesdownloaded = 0
+info_ginzicut = None
+info_eweka = None
 
 class Nntpthread(Thread):
         def __init__(self, artlist, lock):
@@ -34,11 +39,12 @@ class Nntpthread(Thread):
 
         def run(self):
                 global bytesdownloaded
+                global info_ginzicut
                 bytesdl = 0
                 for a in self.artlist:
                         try:
                                 resp, info = self.s.body(a)
-                                print(resp)
+                                info_ginzicut = info
                                 bytesdl += sum(len(i) for i in info.lines)
                                 # print(i, a, " ---> ", resp)
                         except Exception as e:
@@ -47,7 +53,7 @@ class Nntpthread(Thread):
                         bytesdownloaded += bytesdl
 
 
-maxconn = 10
+maxconn = 14
 clientthreads = []
 
 lock = threading.Lock()
@@ -68,3 +74,23 @@ print("Mbit/sec:", int(mbpersec * 8))
 
 for n in clientthreads:
         n.s.quit()
+
+sys.exit()
+
+sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS)
+nntp_obj = nntplib.NNTP_SSL(settings.forward_server_url, user=settings.forward_server_user,
+                            password=settings.forward_server_pass, ssl_context=sslcontext,
+                            port=settings.forward_server_port, readermode=True, timeout=5)
+for a in artlist:
+        print(a)
+        resp, info = nntp_obj.body(a)
+        print("-----------------", resp)
+        info_eweka = info
+
+i0 = [i for i, j in zip(info_eweka, info_ginzicut) if i != j]
+
+print("... read from eweka directly")
+print(info_eweka.lines[0:4])
+a = input()
+print("... read from ginzicut")
+print(info_ginzicut.lines[0:4])
