@@ -33,6 +33,7 @@
 import settings_secret as settings
 import socketserver
 import dill
+import pickle
 import signal
 import sys
 import time
@@ -44,6 +45,7 @@ __version__ = "0.1"
 TIMEOUT = 180
 CRLF = "\r\n"
 DB_DIR = "./db/"
+HEADER_BODY_SEPARATOR = "***---sep---***"
 forward_nntp = []
 bodycount = 0
 use_memcached = True
@@ -97,12 +99,6 @@ STATUS_AUTH_ACCEPTED = '281 Authentication accepted'
 STATUS_AUTH_CONTINUE = '381 More authentication information required'
 STATUS_SERVER_VERSION = '200 Ginzicut %s' % (__version__)
 STATUS_CAPABILITIES = "101 Capabilities"
-
-headers = ("Date", "From", "Message-ID", "Newsgroups", "Path", "Subject", "Bytes"
-           "Approved", "Archive", "Control", "Distribution", "Expires", "Followup-To",
-           "Injection-Date", "Injection-Info", "Organization", "References",
-           "Summary", "Supersedes", "User-Agent", "Xref", "Lines", "Sender", "Content-Type",
-           "X-Newsposter", "X-Received-Bytes", "X-Received-Body-CRC")
 
 
 def sighandler(signum, frame):
@@ -274,7 +270,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             # first search in memcached
             mc_key_head = id0 + ":head"
             try:
-                head0 = dill.loads(self.pymemclient.get(mc_key_head))
+                head0 = pickle.loads(self.pymemclient.get(mc_key_head))
                 return 1
             except Exception as e:
                 return None
@@ -302,17 +298,20 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             mc_key_body = id0 + ":body"
             try:
                 if onlybody:
-                    body0 = dill.loads(self.pymemclient.get(mc_key_body))
-                    return id0, None, body0
+                    body0 = pickle.loads(self.pymemclient.get(mc_key_body))
+                    if body0:
+                        return id0, None, body0
                 elif onlyhead:
-                    head0 = dill.loads(self.pymemclient.get(mc_key_head))
-                    return id0, head0, None
+                    head0 = pickle.loads(self.pymemclient.get(mc_key_head))
+                    if head0:
+                        return id0, head0, None
                 else:
-                    head0 = dill.loads(self.pymemclient.get(mc_key_head))
-                    body0 = dill.loads(self.pymemclient.get(mc_key_body))
-                    return id0, head0, body0
+                    head0 = pickle.loads(self.pymemclient.get(mc_key_head))
+                    body0 = pickle.loads(self.pymemclient.get(mc_key_body))
+                    if head0 and body0:
+                        return id0, head0, body0
             except Exception as e:
-                # print(str(e), "not found in memcached")
+                print(str(e), "not found in memcached")
                 pass
         # then in in db directory:
         art_found_in_db = True
@@ -322,12 +321,12 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             art_found_in_db = False
         if art_found_in_db:
             print("reading from db")
-            data01 = dill.loads(f.read())
+            data01 = pickle.loads(f.read())
             art_head = []
             art_body = []
             separator_found = False
             for d0 in data01:
-                if d0 == "***---sep---***":
+                if d0 == HEADER_BODY_SEPARATOR:
                     separator_found = True
                     continue
                 if not separator_found:
@@ -342,10 +341,8 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             if use_memcached:
                 # save in cache
                 try:
-                    art_body_dill = dill.dumps(conv_body)
-                    art_head_dill = dill.dumps(conv_head)
-                    self.pymemclient.set(id0 + ":head", art_head_dill)
-                    self.pymemclient.set(id0 + ":body", art_body_dill)
+                    self.pymemclient.set(id0 + ":head", pickle.dumps(conv_head))
+                    self.pymemclient.set(id0 + ":body", pickle.dumps(conv_body))
                 except Exception as e:
                     pass
             return id0, conv_head, conv_body
@@ -361,18 +358,16 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                 if use_memcached:
                     # save in cache
                     try:
-                        art_body_dill = dill.dumps(art_body0)
-                        art_head_dill = dill.dumps(art_head0)
-                        self.pymemclient.set(id0 + ":head", art_head_dill)
-                        self.pymemclient.set(id0 + ":body", art_body_dill)
+                        self.pymemclient.set(id0 + ":head", pickle.dumps(art_head0))
+                        self.pymemclient.set(id0 + ":body", pickle.dumps(art_body0))
                     except Exception as e:
                         pass
                 # write to file in db dir
                 f = open(DB_DIR + id0, "wb")
                 data0 = [ah.decode("latin-1") for ah in art_head]
-                data0.append("***---sep---***")
+                data0.append(HEADER_BODY_SEPARATOR)
                 data0.extend([ab.decode("latin-1") for ab in art_body])
-                f.write(dill.dumps(data0))
+                f.write(pickle.dumps(data0))
                 f.flush()
                 f.close()
                 return id0, art_head0, art_body0
@@ -381,7 +376,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
     def bytelist_to_latin_crlf_str(self, bytelist0):
         s = ""
         for b in bytelist0:
-            s += b.decode("latin-1") + CRLF 
+            s += b.decode("latin-1") + CRLF
         return s
             
     # NNTP responses

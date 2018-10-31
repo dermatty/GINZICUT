@@ -23,7 +23,7 @@ for l1 in lines:
 
 print("done", len(artlist))
 
-# artlist = ["<part9of131.mVhZUeNfjvVQg2z1CJLq@powerpost2000AA.local>"]
+artlist = ["<part9of131.mVhZUeNfjvVQg2z1CJLq@powerpost2000AA.local>"]
 
 bytesdownloaded = 0
 info_ginzicut = None
@@ -53,7 +53,7 @@ class Nntpthread(Thread):
                         bytesdownloaded += bytesdl
 
 
-maxconn = 14
+maxconn = 1
 clientthreads = []
 
 lock = threading.Lock()
@@ -72,10 +72,10 @@ kbpersec = bytespersec / 1024
 mbpersec = kbpersec / 1024
 print("Mbit/sec:", int(mbpersec * 8))
 
-for n in clientthreads:
-        n.s.quit()
+#for n in clientthreads:
+#        n.s.quit()
 
-sys.exit()
+#sys.exit()
 
 sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS)
 nntp_obj = nntplib.NNTP_SSL(settings.forward_server_url, user=settings.forward_server_user,
@@ -87,10 +87,16 @@ for a in artlist:
         print("-----------------", resp)
         info_eweka = info
 
-i0 = [i for i, j in zip(info_eweka, info_ginzicut) if i != j]
+# i0 = [i for i, j in zip(info_eweka, info_ginzicut) if i != j]
 
 print("... read from eweka directly")
-print(info_eweka.lines[0:4])
-a = input()
+print(info_eweka.lines[11])
 print("... read from ginzicut")
-print(info_ginzicut.lines[0:4])
+print(info_ginzicut.lines[11])
+
+for n in clientthreads:
+        n.s.quit()
+
+sys.exit()
+
+### todo: bei ginzicut ist noch ein b'' dran ###
