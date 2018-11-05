@@ -23,11 +23,12 @@ for l1 in lines:
 
 print("done", len(artlist))
 
-artlist = ["<part9of131.mVhZUeNfjvVQg2z1CJLq@powerpost2000AA.local>"]
+# artlist = ["<part9of131.mVhZUeNfjvVQg2z1CJLq@powerpost2000AA.local>"]
 
 bytesdownloaded = 0
 info_ginzicut = None
 info_eweka = None
+
 
 class Nntpthread(Thread):
         def __init__(self, artlist, lock):
@@ -35,7 +36,7 @@ class Nntpthread(Thread):
                 self.daemon = True
                 self.lock = lock
                 self.artlist = artlist
-                self.s = nntplib.NNTP('etec.iv.at', port=7016)
+                self.s = nntplib.NNTP('127.0.0.1', port=7016)
 
         def run(self):
                 global bytesdownloaded
@@ -44,7 +45,7 @@ class Nntpthread(Thread):
                 for a in self.artlist:
                         try:
                                 resp, info = self.s.body(a)
-                                info_ginzicut = info
+                                # info_ginzicut = info
                                 bytesdl += sum(len(i) for i in info.lines)
                                 # print(i, a, " ---> ", resp)
                         except Exception as e:
@@ -53,7 +54,7 @@ class Nntpthread(Thread):
                         bytesdownloaded += bytesdl
 
 
-maxconn = 1
+maxconn = 12
 clientthreads = []
 
 lock = threading.Lock()
@@ -72,10 +73,12 @@ kbpersec = bytespersec / 1024
 mbpersec = kbpersec / 1024
 print("Mbit/sec:", int(mbpersec * 8))
 
-#for n in clientthreads:
-#        n.s.quit()
+for n in clientthreads:
+        n.s.quit()
 
-#sys.exit()
+# print(info_ginzicut.lines[0:3])
+
+sys.exit()
 
 sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS)
 nntp_obj = nntplib.NNTP_SSL(settings.forward_server_url, user=settings.forward_server_user,
@@ -90,9 +93,9 @@ for a in artlist:
 # i0 = [i for i, j in zip(info_eweka, info_ginzicut) if i != j]
 
 print("... read from eweka directly")
-print(info_eweka.lines[11])
+print(info_eweka.lines[-3:])
 print("... read from ginzicut")
-print(info_ginzicut.lines[11])
+print(info_ginzicut.lines[-3:])
 
 for n in clientthreads:
         n.s.quit()
@@ -100,3 +103,4 @@ for n in clientthreads:
 sys.exit()
 
 ### todo: bei ginzicut ist noch ein b'' dran ###
+### peewee instead of redis ####

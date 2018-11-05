@@ -39,7 +39,7 @@ import sys
 import time
 import ssl
 import nntplib
-from pymemcache.client.base import Client as pymemClient
+import redis
 
 __version__ = "0.1"
 TIMEOUT = 180
@@ -125,14 +125,13 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         self.terminated = True
 
     def handle(self):
-        global use_memcached
 
-        if use_memcached:
+        if settings.use_redis:
             try:
-                self.pymemclient = pymemClient(('localhost', 11211))
+                self.redisclient = redis.StrictRedis(settings.redis_host, settings.redis_port, db=0)
             except Exception as e:
-                print("memcached connection error: " + str(e))
-                use_memcached = False
+                print("redis connection error: " + str(e))
+                settings.use_redis = False
 
         if settings.server_type == 'read-only':
             self.send_response(STATUS_READYNOPOST % (settings.nntp_hostname, __version__))
@@ -172,7 +171,6 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                     else:
                         if cmd0 in self.commands:
                             eval("self.do_" + cmd0 + "()")
-                            # getattr(self, "do_" + cmd0)()
                         else:
                             self.send_response(ERR_NOTCAPABLE)
 
@@ -266,11 +264,11 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def backend_stat(self, id):
         id0 = self.get_correct_id(id)
-        if use_memcached:
+        if settings.use_redis:
             # first search in memcached
             mc_key_head = id0 + ":head"
             try:
-                head0 = pickle.loads(self.pymemclient.get(mc_key_head))
+                head0 = pickle.loads(self.redisclient.get(mc_key_head))
                 return 1
             except Exception as e:
                 return None
@@ -292,26 +290,30 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def backend_get_article(self, id, onlybody=False, onlyhead=False):
         id0 = self.get_correct_id(id)
-        if use_memcached:
+        if settings.use_redis:
             # first search in memcached
             mc_key_head = id0 + ":head"
             mc_key_body = id0 + ":body"
             try:
                 if onlybody:
-                    body0 = pickle.loads(self.pymemclient.get(mc_key_body))
-                    if body0:
-                        return id0, None, body0
+                    # body0 = pickle.loads(self.redisclient.get(mc_key_body))
+                    # body0 = self.redisclient.lrange(mc_key_body, 0, -1)[0]
+                    return id0, None, self.redisclient.lrange(mc_key_body, 0, -1)[0], "redis"
                 elif onlyhead:
-                    head0 = pickle.loads(self.pymemclient.get(mc_key_head))
+                    # head0 = pickle.loads(self.redisclient.get(mc_key_head))
+                    head0 = self.redisclient.lrange(mc_key_head, 0, -1)[0]
                     if head0:
-                        return id0, head0, None
+                        return id0, head0, None, "redis"
                 else:
-                    head0 = pickle.loads(self.pymemclient.get(mc_key_head))
-                    body0 = pickle.loads(self.pymemclient.get(mc_key_body))
+                    # head0 = pickle.loads(self.redisclient.get(mc_key_head))
+                    # body0 = pickle.loads(self.redisclient.get(mc_key_body))
+                    body0 = self.redisclient.lrange(mc_key_body, 0, -1)[0]
+                    head0 = self.redisclient.lrange(mc_key_head, 0, -1)[0]
+                    # head0 = self.bytelist_to_latin_crlf_str(eval(self.redisclient.get(mc_key_head)))
                     if head0 and body0:
-                        return id0, head0, body0
+                        return id0, head0, body0, "redis"
             except Exception as e:
-                print(str(e), "not found in memcached")
+                print(str(e), " --> not found in redis")
                 pass
         # then in in db directory:
         art_found_in_db = True
@@ -338,14 +340,16 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             print("found in db!")
             conv_head = self.bytelist_to_latin_crlf_str(art_head)
             conv_body = self.bytelist_to_latin_crlf_str(art_body)
-            if use_memcached:
+            if settings.use_redis:
                 # save in cache
                 try:
-                    self.pymemclient.set(id0 + ":head", pickle.dumps(conv_head))
-                    self.pymemclient.set(id0 + ":body", pickle.dumps(conv_body))
+                    # self.redisclient.set(id0 + ":head", pickle.dumps(conv_head))
+                    # self.redisclient.set(id0 + ":body", pickle.dumps(conv_body))
+                    self.redisclient.rpush(id0 + ":head", conv_head.encode("latin-1"))
+                    self.redisclient.rpush(id0 + ":body", conv_body.encode("latin-1"))
                 except Exception as e:
-                    pass
-            return id0, conv_head, conv_body
+                    print("***", str(e))
+            return id0, conv_head.encode("latin-1"), conv_body.encode("latin-1"), "file-db"
         else:
             if settings.do_forwarding:
                 art_head, art_body = self.forward_get_article(id0)
@@ -355,11 +359,13 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                 # convert b'' to CRLF separated string
                 art_body0 = self.bytelist_to_latin_crlf_str(art_body)
                 art_head0 = self.bytelist_to_latin_crlf_str(art_head)
-                if use_memcached:
+                if settings.use_redis:
                     # save in cache
                     try:
-                        self.pymemclient.set(id0 + ":head", pickle.dumps(art_head0))
-                        self.pymemclient.set(id0 + ":body", pickle.dumps(art_body0))
+                        # self.redisclient.set(id0 + ":head", pickle.dumps(art_head0))
+                        # self.redisclient.set(id0 + ":body", pickle.dumps(art_body0))
+                        self.redisclient.rpush(id0 + ":head", art_head0.encode("latin-1"))
+                        self.redisclient.rpush(id0 + ":body", art_body0.encode("latin-1"))
                     except Exception as e:
                         pass
                 # write to file in db dir
@@ -370,15 +376,17 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                 f.write(pickle.dumps(data0))
                 f.flush()
                 f.close()
-                return id0, art_head0, art_body0
+                return id0, art_head0.encode("latin-1"), art_body0.encode("latin-1"), "forwarding-host"
         return id0, None, None
 
     def bytelist_to_latin_crlf_str(self, bytelist0):
-        s = ""
+        s = CRLF.join(b.decode("latin-1") for b in bytelist0)
+        return s
+        '''s = ""
         for b in bytelist0:
             s += b.decode("latin-1") + CRLF
-        return s
-            
+        return s'''
+
     # NNTP responses
 
     def do_POST(self):
@@ -425,14 +433,19 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
     def do_BODY(self):
         global bodycount
         param1 = self.params[1]
-        message_id, article_head, article_body = self.backend_get_article(param1, onlybody=True)
+        message_id, article_head, article_body, from_db = self.backend_get_article(param1, onlybody=True)
         if not article_body:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
-            bodycount += 1
-            print("BODY ", param1, bodycount)
+            # bodycount += 1
+            # print("BODY ", param1, bodycount, from_db)
             response = STATUS_BODY % (1, message_id)
-            self.send_response("%s\r\n%s\r\n." % (response, article_body))
+            resp1 = b''.join([response.encode("latin-1"), "\r\n".encode("latin-1"), article_body,
+                              "\r\n.\r\n".encode("latin-1")])
+            # print(resp1)
+            self.wfile.write(resp1)
+            self.wfile.flush()
+            # self.send_response("%s\r\n%s\r\n." % (response, article_body))
 
     def do_STAT(self):
         param1 = self.params[1]
@@ -454,7 +467,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
 class NNTPServer(socketserver.ForkingTCPServer):
     allow_reuse_address = True
-    request_queue_size = 128
+    request_queue_size = 6
     if settings.max_connections:
         max_children = settings.max_connections
 
@@ -466,3 +479,4 @@ if __name__ == '__main__':
 
     server = NNTPServer((settings.nntp_hostname, settings.nntp_port), NNTPRequestHandler)
     server.serve_forever()
+
