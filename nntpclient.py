@@ -45,7 +45,7 @@ class Nntpthread(Thread):
                 for a in self.artlist:
                         try:
                                 resp, info = self.s.body(a)
-                                # info_ginzicut = info
+                                info_ginzicut = info
                                 bytesdl += sum(len(i) for i in info.lines)
                                 # print(i, a, " ---> ", resp)
                         except Exception as e:
@@ -93,9 +93,9 @@ for a in artlist:
 # i0 = [i for i, j in zip(info_eweka, info_ginzicut) if i != j]
 
 print("... read from eweka directly")
-print(info_eweka.lines[-3:])
+print(info_eweka.lines[-5:])
 print("... read from ginzicut")
-print(info_ginzicut.lines[-3:])
+print(info_ginzicut.lines[-5:])
 
 for n in clientthreads:
         n.s.quit()

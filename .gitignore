@@ -1,6 +1,7 @@
 articles.txt
 settings_secret.py
 
+
 *.py[cod]
 *$py.class
 
@@ -55,3 +56,6 @@ ENV/
 
 # article storage dir
 db/
+
+# logs
+/log

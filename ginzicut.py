@@ -3,7 +3,7 @@
 ''' GINZICUT: Test server for ginzibix
     (c) 2018 Stephan Untergrabner <stephan@untergrabner.at>
 
-    This is light-weight & stripped down pyhton3 re-implementation of
+    This is light-weight & stripped down (read-only )pyhton3 re-implementation of
 
                   https://github.com/jpm/papercut
 
@@ -32,7 +32,6 @@
 
 import settings_secret as settings
 import socketserver
-import dill
 import pickle
 import signal
 import sys
@@ -40,15 +39,20 @@ import time
 import ssl
 import nntplib
 import redis
+import logging
+import logging.handlers
 
-__version__ = "0.1"
+__version__ = "1.0"
+
 TIMEOUT = 180
 CRLF = "\r\n"
 DB_DIR = "./db/"
 HEADER_BODY_SEPARATOR = "***---sep---***"
-forward_nntp = []
-bodycount = 0
-use_memcached = True
+FORWARD_NNTP = []
+REDISCLIENT = None
+CRLF_ENC = "\r\n".encode("latin-1")
+ENDART_ENC = "\r\n.\r\n".encode("latin-1")
+LOGGER = None
 
 ERR_NOTCAPABLE = '500 command not recognized'
 ERR_CMDSYNTAXERROR = '501 command syntax error (or un-implemented option)'
@@ -103,8 +107,8 @@ STATUS_CAPABILITIES = "101 Capabilities"
 
 def sighandler(signum, frame):
     global server
-    global forward_nntp
-    for fo in forward_nntp:
+    global FORWARD_NNTP
+    for fo in FORWARD_NNTP:
         if fo:
             fo.quit()
     server.socket.close()
@@ -115,31 +119,27 @@ def sighandler(signum, frame):
 class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def __init__(self, request, client_address, server):
-        self.commands = ("CAPABILITIES", "ARTICLE", "BODY", "QUIT", "POST", "STAT", "HEAD")
-        self.terminated = False
-        self.nntpobj = None
-        self.timeout = TIMEOUT
         socketserver.StreamRequestHandler.__init__(self, request, client_address, server)
 
     def handle_timeout(self, signum, frame):
         self.terminated = True
 
     def handle(self):
+        global LOGGER
+        self.logger = LOGGER
 
-        if settings.use_redis:
-            try:
-                self.redisclient = redis.StrictRedis(settings.redis_host, settings.redis_port, db=0)
-            except Exception as e:
-                print("redis connection error: " + str(e))
-                settings.use_redis = False
+        global REDISCLIENT
+        self.redisclient = REDISCLIENT
+
+        self.commands = ("CAPABILITIES", "ARTICLE", "BODY", "QUIT", "STAT", "HEAD")
+        self.terminated = False
+        self.nntpobj = None
+        self.timeout = TIMEOUT
 
         if settings.server_type == 'read-only':
             self.send_response(STATUS_READYNOPOST % (settings.nntp_hostname, __version__))
         else:
             self.send_response(STATUS_READYOKPOST % (settings.nntp_hostname, __version__))
-
-        self.sending_article = False
-        self.article_lines = []
 
         while not self.terminated:
 
@@ -148,34 +148,23 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             except IOError:
                 continue
 
-            if not self.sending_article:
-                cmd = self.inputline.decode().strip()
-                self.params = cmd.split(" ")
-                cmd0 = self.params[0].upper()
-            else:
-                cmd = self.inputline.decode()
-                cmd0 = "posting ...", cmd
+            cmd = self.inputline.decode().strip()
+            self.params = cmd.split(" ")
+            cmd0 = self.params[0].upper()
 
             if cmd0:
-                if cmd0 == "POST":
-                    self.sending_article = True
-                    self.send_response(STATUS_SENDARTICLE)
+                self.logger.debug("received " + cmd0 + " from " + str(self.client_address))
+                if cmd0 in self.commands:
+                    try:
+                        eval("self.do_" + cmd0 + "()")
+                    except Exception as e:
+                        self.logger.error(str(e) + ": this should not occur - do not know command " + cmd0)
+                        self.send_response(ERR_NOTCAPABLE)
                 else:
-                    if self.sending_article:
-                        if cmd == ".\r\n":
-                            self.sending_article = False
-                            self.article_lines = []
-                            self.do_POST()
-                            continue
-                        self.article_lines.append(cmd.rstrip())
-                    else:
-                        if cmd0 in self.commands:
-                            eval("self.do_" + cmd0 + "()")
-                        else:
-                            self.send_response(ERR_NOTCAPABLE)
+                    self.send_response(ERR_NOTCAPABLE)
 
     def open_connection(self):
-        global forward_nntp
+        global FORWARD_NNTP
         if not settings.do_forwarding:
             return None
         sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS)
@@ -187,16 +176,16 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             nntp_obj = nntplib.NNTP(settings.forward_server_url, user=settings.forward_server_user,
                                     password=settings.forward_server_pass, ssl_context=sslcontext,
                                     port=settings.forward_server_port, readermode=True, timeout=5)
-        forward_nntp.append(nntp_obj)
+        FORWARD_NNTP.append(nntp_obj)
         return nntp_obj
 
     def close_connection(self):
-        global forward_nntp
+        global FORWARD_NNTP
         if self.nntpobj:
             try:
-                forward_nntp.remove(self.nntpobj)
+                FORWARD_NNTP.remove(self.nntpobj)
             except Exception as e:
-                print(str(e))
+                self.logger.error(str(e) + ": connection close error")
             self.nntpobj.quit()
 
     def list_to_crlf_str(self, list0, decoding=False):
@@ -210,12 +199,12 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             return CRLF.join(list0)
 
     def retry_connect(self):
-        global forward_nntp
+        global FORWARD_NNTP
         try:
-            forward_nntp.remove(self.nntpobj)
+            FORWARD_NNTP.remove(self.nntpobj)
             self.nntpobj.quit()
         except Exception as e:
-            print(str(e))
+            self.logger.warning(str(e) + ": retry connect warning")
         idx = 0
         while idx < 5:
             self.nntpobj = self.open_connection()
@@ -268,8 +257,11 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             # first search in memcached
             mc_key_head = id0 + ":head"
             try:
-                head0 = pickle.loads(self.redisclient.get(mc_key_head))
-                return 1
+                head0 = self.redisclient.lrange(mc_key_head, 0, -1)[0]
+                if head0:
+                    return 1
+                else:
+                    return None
             except Exception as e:
                 return None
         # just look in db directory
@@ -282,10 +274,8 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
     def get_correct_id(self, id):
         id0 = id.rstrip().lstrip()
-        if id0[0] != "<":
-            id0 = "<" + id0
-        if id[-1] != ">":
-            id0 += ">"
+        id0 = id0 + '>' if not id0.endswith('>') else id0
+        id0 = "<" + id0 if not id0.startswith('<') else id0
         return id0
 
     def backend_get_article(self, id, onlybody=False, onlyhead=False):
@@ -296,24 +286,20 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
             mc_key_body = id0 + ":body"
             try:
                 if onlybody:
-                    # body0 = pickle.loads(self.redisclient.get(mc_key_body))
-                    # body0 = self.redisclient.lrange(mc_key_body, 0, -1)[0]
-                    return id0, None, self.redisclient.lrange(mc_key_body, 0, -1)[0], "redis"
+                    body0 = self.redisclient.lrange(mc_key_body, 0, -1)[0]
+                    if body0:
+                        return id0, None, body0, "redis"
                 elif onlyhead:
-                    # head0 = pickle.loads(self.redisclient.get(mc_key_head))
                     head0 = self.redisclient.lrange(mc_key_head, 0, -1)[0]
                     if head0:
                         return id0, head0, None, "redis"
                 else:
-                    # head0 = pickle.loads(self.redisclient.get(mc_key_head))
-                    # body0 = pickle.loads(self.redisclient.get(mc_key_body))
                     body0 = self.redisclient.lrange(mc_key_body, 0, -1)[0]
                     head0 = self.redisclient.lrange(mc_key_head, 0, -1)[0]
-                    # head0 = self.bytelist_to_latin_crlf_str(eval(self.redisclient.get(mc_key_head)))
                     if head0 and body0:
                         return id0, head0, body0, "redis"
             except Exception as e:
-                print(str(e), " --> not found in redis")
+                self.logger.warning(str(e) + ": " + id0 + " not found in redis")
                 pass
         # then in in db directory:
         art_found_in_db = True
@@ -322,7 +308,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         except FileNotFoundError:
             art_found_in_db = False
         if art_found_in_db:
-            print("reading from db")
+            self.logger.debug("reading body " + id0 + " from db")
             data01 = pickle.loads(f.read())
             art_head = []
             art_body = []
@@ -337,115 +323,88 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                     art_body.append(d0.encode("latin-1"))
 
             f.close()
-            print("found in db!")
+            self.logger.debug(id0 + " found in db!")
             conv_head = self.bytelist_to_latin_crlf_str(art_head)
             conv_body = self.bytelist_to_latin_crlf_str(art_body)
             if settings.use_redis:
                 # save in cache
                 try:
-                    # self.redisclient.set(id0 + ":head", pickle.dumps(conv_head))
-                    # self.redisclient.set(id0 + ":body", pickle.dumps(conv_body))
                     self.redisclient.rpush(id0 + ":head", conv_head.encode("latin-1"))
                     self.redisclient.rpush(id0 + ":body", conv_body.encode("latin-1"))
                 except Exception as e:
-                    print("***", str(e))
+                    self.logger.error(str(e) + ": redis push error")
             return id0, conv_head.encode("latin-1"), conv_body.encode("latin-1"), "file-db"
         else:
             if settings.do_forwarding:
                 art_head, art_body = self.forward_get_article(id0)
                 if not art_head:
                     return id0, None, None
-                print("found on forwarding news server!")
+                self.logger.debug(id0 + " found on forwarding news server!")
                 # convert b'' to CRLF separated string
                 art_body0 = self.bytelist_to_latin_crlf_str(art_body)
                 art_head0 = self.bytelist_to_latin_crlf_str(art_head)
                 if settings.use_redis:
                     # save in cache
                     try:
-                        # self.redisclient.set(id0 + ":head", pickle.dumps(art_head0))
-                        # self.redisclient.set(id0 + ":body", pickle.dumps(art_body0))
                         self.redisclient.rpush(id0 + ":head", art_head0.encode("latin-1"))
                         self.redisclient.rpush(id0 + ":body", art_body0.encode("latin-1"))
                     except Exception as e:
-                        pass
+                        self.logger.error(str(e) + ": redis push error")
                 # write to file in db dir
-                f = open(DB_DIR + id0, "wb")
-                data0 = [ah.decode("latin-1") for ah in art_head]
-                data0.append(HEADER_BODY_SEPARATOR)
-                data0.extend([ab.decode("latin-1") for ab in art_body])
-                f.write(pickle.dumps(data0))
-                f.flush()
-                f.close()
+                try:
+                    f = open(DB_DIR + id0, "wb")
+                    data0 = [ah.decode("latin-1") for ah in art_head]
+                    data0.append(HEADER_BODY_SEPARATOR)
+                    data0.extend([ab.decode("latin-1") for ab in art_body])
+                    f.write(pickle.dumps(data0))
+                    f.flush()
+                    f.close()
+                except Exception as e:
+                    self.logger.error(str(e) + ": write to file error")
                 return id0, art_head0.encode("latin-1"), art_body0.encode("latin-1"), "forwarding-host"
         return id0, None, None
 
     def bytelist_to_latin_crlf_str(self, bytelist0):
-        s = CRLF.join(b.decode("latin-1") for b in bytelist0)
-        return s
-        '''s = ""
-        for b in bytelist0:
-            s += b.decode("latin-1") + CRLF
-        return s'''
+        return CRLF.join(b.decode("latin-1") for b in bytelist0)
 
     # NNTP responses
 
-    def do_POST(self):
-        self.send_response(STATUS_POSTSUCCESSFULL)
-        message_ID = None
-        for a in self.article_lines:
-            if "Message-ID" == a[:10]:
-                message_ID = a.split("Message-ID:")[1].lstrip()
-                break
-        if message_ID:
-            f = open(DB_DIR + message_ID + ".bak", "wb")
-            for a in self.article_lines:
-                a += CRLF
-                f.write(a.encode("latin-1"))
-            f.flush()
-            f.close()
-
     def do_CAPABILITIES(self):
-        cap = (STATUS_CAPABILITIES, "VERSION 2", "ARTICLE", ".")
-        for c in cap:
+        for c in (STATUS_CAPABILITIES, "VERSION 2", "ARTICLE", "."):
             self.send_response(c)
 
     def do_ARTICLE(self):
         param1 = self.params[1]
-        message_id, article_head, article_body = self.backend_get_article(param1)
+        message_id, article_head, article_body, from_db = self.backend_get_article(param1)
         if not article_head:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
             response = STATUS_ARTICLE % (1, message_id)
+            self.logger.debug("response: ARTICLE " + str(param1) + " " + str(from_db))
             self.send_response("%s\r\n%s\r\n\r\n%s\r\n." % (response, article_head, article_body))
 
     def do_HEAD(self):
-        global bodycount
         param1 = self.params[1]
-        message_id, article_head, article_body = self.backend_get_article(param1, onlyhead=True)
+        message_id, article_head, article_body, from_db = self.backend_get_article(param1, onlyhead=True)
         if not article_head:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
-            bodycount += 1
-            print("HEAD ", param1, bodycount)
+            self.logger.debug("response: HEAD " + str(param1) + " " + str(from_db))
             response = STATUS_HEAD % (1, message_id)
             self.send_response("%s\r\n%s\r\n." % (response, article_head))
 
     def do_BODY(self):
-        global bodycount
         param1 = self.params[1]
         message_id, article_head, article_body, from_db = self.backend_get_article(param1, onlybody=True)
         if not article_body:
             self.send_response(ERR_NOSUCHARTICLENUM)
         else:
-            # bodycount += 1
-            # print("BODY ", param1, bodycount, from_db)
+            self.logger.debug("response: BODY " + str(param1) + " " + str(from_db))
+            # for performance reasons
             response = STATUS_BODY % (1, message_id)
-            resp1 = b''.join([response.encode("latin-1"), "\r\n".encode("latin-1"), article_body,
-                              "\r\n.\r\n".encode("latin-1")])
-            # print(resp1)
+            resp1 = b''.join([response.encode("latin-1"), CRLF_ENC, article_body, ENDART_ENC])
             self.wfile.write(resp1)
             self.wfile.flush()
-            # self.send_response("%s\r\n%s\r\n." % (response, article_body))
 
     def do_STAT(self):
         param1 = self.params[1]
@@ -467,16 +426,45 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
 
 class NNTPServer(socketserver.ForkingTCPServer):
     allow_reuse_address = True
-    request_queue_size = 6
+    request_queue_size = 12
     if settings.max_connections:
         max_children = settings.max_connections
 
 
 if __name__ == '__main__':
 
+    LOGGER = logging.getLogger("ginzicut")
+    if settings.debug_level == "debug":
+        LOGGER.setLevel(logging.DEBUG)
+    elif settings.debug_level == "warning":
+        LOGGER.setLevel(logging.WARNING)
+    elif settings.debug_level == "error":
+        LOGGER.setLevel(logging.ERROR)
+    else:
+        LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = False
+    fh = logging.FileHandler("log/ginzicut.log", mode="w")
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    LOGGER.addHandler(fh)
+
+    if settings.use_redis:
+        try:
+            if settings.redis_unix:
+                REDISCLIENT = redis.StrictRedis(unix_socket_path=settings.unix_socket_path, db=0)
+                LOGGER.info("connected to redis via unix socket")
+            elif settings.redis_tcp:
+                REDISCLIENT = redis.StrictRedis(host=settings.host, port=settings.port, db=0)
+                LOGGER.info("connected to redis via tcp")
+            else:
+                raise("use-redis = True but no socket option given!")
+        except Exception as e:
+            LOGGER.error("redis connection error: " + str(e))
+            settings.use_redis = False
+
     signal.signal(signal.SIGINT, sighandler)
     signal.signal(signal.SIGTERM, sighandler)
 
+    LOGGER.info("starting ginzicut NNTP server on port " + str(settings.nntp_port))
     server = NNTPServer((settings.nntp_hostname, settings.nntp_port), NNTPRequestHandler)
     server.serve_forever()
-
