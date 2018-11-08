@@ -54,7 +54,7 @@ class Nntpthread(Thread):
                         bytesdownloaded += bytesdl
 
 
-maxconn = 12
+maxconn = 8
 clientthreads = []
 
 lock = threading.Lock()

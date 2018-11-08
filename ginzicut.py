@@ -41,6 +41,7 @@ import nntplib
 import redis
 import logging
 import logging.handlers
+import socket
 
 __version__ = "1.0"
 
@@ -141,11 +142,14 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
         else:
             self.send_response(STATUS_READYOKPOST % (settings.nntp_hostname, __version__))
 
+        self.logger.info("finished init for " + str(self.client_address))
+
         while not self.terminated:
 
             try:
                 self.inputline = self.rfile.readline()
-            except IOError:
+            except IOError as e:
+                self.logger.warning(str(e) + ": tcp readline error")
                 continue
 
             cmd = self.inputline.decode().strip()
@@ -288,15 +292,18 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                 if onlybody:
                     body0 = self.redisclient.lrange(mc_key_body, 0, -1)[0]
                     if body0:
+                        self.logger.debug(id0 + ": body found on redis!")
                         return id0, None, body0, "redis"
                 elif onlyhead:
                     head0 = self.redisclient.lrange(mc_key_head, 0, -1)[0]
                     if head0:
+                        self.logger.debug(id0 + ": head found on redis!")
                         return id0, head0, None, "redis"
                 else:
                     body0 = self.redisclient.lrange(mc_key_body, 0, -1)[0]
                     head0 = self.redisclient.lrange(mc_key_head, 0, -1)[0]
                     if head0 and body0:
+                        self.logger.debug(id0 + ": head & body found on redis!")
                         return id0, head0, body0, "redis"
             except Exception as e:
                 self.logger.warning(str(e) + ": " + id0 + " not found in redis")

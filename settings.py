@@ -1,5 +1,5 @@
 # debug
-debug_level = "info"
+debug_level = "debug"
 
 # ginzicut server
 nntp_hostname = "0.0.0.0"
@@ -7,7 +7,7 @@ nntp_port = 7016
 max_connections = 12
 
 # server_type
-server_type = "read-write"
+server_type = "read-only"
 
 # forwarding
 do_forwarding = True
