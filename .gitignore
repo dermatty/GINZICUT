@@ -1,6 +1,7 @@
 articles.txt
 settings_secret.py
-
+sab
+yenc
 
 *.py[cod]
 *$py.class
