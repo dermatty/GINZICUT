@@ -166,6 +166,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                         self.send_response(ERR_NOTCAPABLE)
                 else:
                     self.send_response(ERR_NOTCAPABLE)
+        self.logger.info("closing handler for " + str(self.client_address))
 
     def open_connection(self):
         global FORWARD_NNTP
@@ -459,10 +460,10 @@ if __name__ == '__main__':
         try:
             if settings.redis_unix:
                 REDISCLIENT = redis.StrictRedis(unix_socket_path=settings.unix_socket_path, db=0)
-                LOGGER.info("connected to redis via unix socket")
+                LOGGER.info("starting ginzicut NNTP server on unix socket " + settings.unix_socket_path)
             elif settings.redis_tcp:
                 REDISCLIENT = redis.StrictRedis(host=settings.host, port=settings.port, db=0)
-                LOGGER.info("connected to redis via tcp")
+                LOGGER.info("starting ginzicut NNTP server on port " + str(settings.nntp_port))
             else:
                 raise("use-redis = True but no socket option given!")
         except Exception as e:
@@ -472,6 +473,5 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, sighandler)
     signal.signal(signal.SIGTERM, sighandler)
 
-    LOGGER.info("starting ginzicut NNTP server on port " + str(settings.nntp_port))
     server = NNTPServer((settings.nntp_hostname, settings.nntp_port), NNTPRequestHandler)
     server.serve_forever()

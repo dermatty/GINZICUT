@@ -3,9 +3,14 @@ import threading
 from threading import Thread
 import settings_secret as settings
 import ssl
+import sabyenc
+import yenc
+import re
+import difflib
 
 f = open("articles.txt", "r")
 lines = f.readlines()
+infolist = []
 f.close()
 artlist = []
 dllist = []
@@ -23,7 +28,7 @@ for l1 in lines:
 
 print("done", len(artlist))
 
-# artlist = ["<part9of131.mVhZUeNfjvVQg2z1CJLq@powerpost2000AA.local>"]
+artlist = ["BvH7yENlUkNMGqRbt2Ir@JBinUp.local"]
 
 bytesdownloaded = 0
 info_ginzicut = None
@@ -43,8 +48,10 @@ class Nntpthread(Thread):
                 global info_ginzicut
                 bytesdl = 0
                 for a in self.artlist:
+                        print(a)
                         try:
                                 resp, info = self.s.body(a)
+                                infolist.append(info)
                                 info_ginzicut = info
                                 bytesdl += sum(len(i) for i in info.lines)
                                 # print(i, a, " ---> ", resp)
@@ -54,7 +61,7 @@ class Nntpthread(Thread):
                         bytesdownloaded += bytesdl
 
 
-maxconn = 8
+maxconn = 1
 clientthreads = []
 
 lock = threading.Lock()
@@ -67,6 +74,57 @@ for nntp in clientthreads:
         nntp.start()
 for n in clientthreads:
         n.join()
+
+# print(infolist[-1])
+
+
+bytesfinal_sab = bytearray()
+bytesfinal_yenc = bytearray()
+for info in infolist:
+        # sab
+        data = info[-1]
+        lastline = data[-1].decode("latin-1")
+        m = re.search('size=(.\d+?) ', lastline)
+        if m:
+                size = int(m.group(1))
+        decoded_sab = None
+        data0 = []
+        for d in data:
+                ditem = d
+                if not d.endswith(b"\r\n"):
+                        ditem += b"\r\n"
+                data0.append(ditem)
+        decoded_sab, output_filename, crc, crc_yenc, crc_correct = sabyenc.decode_usenet_chunks(data0, size)
+        print("!-->", len(decoded_sab))
+        bytesfinal_sab.extend(decoded_sab)
+
+        bytes_yenc = bytearray()
+        # yenc
+        for inf in info[-1]:
+                inf_str = inf.decode("latin-1")
+                if inf_str == "":
+                        continue
+                if inf_str.startswith("=ybegin") or inf_str.startswith("=ypart") or inf_str.startswith("=yend"):
+                        continue
+                bytes_yenc.extend(inf)
+        _, _, decoded_yenc = yenc.decode(bytes_yenc)
+        bytesfinal_yenc.extend(decoded_yenc)
+        print("-" * 50)
+        if bytesfinal_sab != bytesfinal_yenc:
+                for a,b in zip(bytesfinal_sab, bytesfinal_yenc):
+                        if a != b:
+                                print(chr(a).encode("latin-1"), chr(b).encode("latin-1"))
+                                ch = input()
+
+print(len(bytesfinal_sab), len(bytesfinal_yenc))
+
+f = open("sab", "wb")
+f.write(bytesfinal_sab)
+f.close()
+
+f = open("yenc", "wb")
+f.write(bytesfinal_yenc)
+f.close()
 
 bytespersec = bytesdownloaded / (time.time() - t0)
 kbpersec = bytespersec / 1024
