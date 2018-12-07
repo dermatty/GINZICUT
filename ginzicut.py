@@ -310,55 +310,57 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                 self.logger.warning(str(e) + ": " + id0 + " not found in redis")
                 pass
         # then in in db directory:
-        art_found_in_db = True
-        try:
-            f = open(DB_DIR + id0, "rb")
-        except FileNotFoundError:
-            art_found_in_db = False
-        if art_found_in_db:
-            self.logger.debug("reading body " + id0 + " from db")
-            data01 = pickle.loads(f.read())
-            art_head = []
-            art_body = []
-            separator_found = False
-            for d0 in data01:
-                if d0 == HEADER_BODY_SEPARATOR:
-                    separator_found = True
-                    continue
-                if not separator_found:
-                    art_head.append(d0.encode("latin-1"))
-                else:
-                    art_body.append(d0.encode("latin-1"))
+        if settings.savefiles:
+            art_found_in_db = True
+            try:
+                f = open(DB_DIR + id0, "rb")
+            except FileNotFoundError:
+                art_found_in_db = False
+            if art_found_in_db:
+                self.logger.debug("reading body " + id0 + " from db")
+                data01 = pickle.loads(f.read())
+                art_head = []
+                art_body = []
+                separator_found = False
+                for d0 in data01:
+                    if d0 == HEADER_BODY_SEPARATOR:
+                        separator_found = True
+                        continue
+                    if not separator_found:
+                        art_head.append(d0.encode("latin-1"))
+                    else:
+                        art_body.append(d0.encode("latin-1"))
 
-            f.close()
-            self.logger.debug(id0 + " found in db!")
-            conv_head = self.bytelist_to_latin_crlf_str(art_head)
-            conv_body = self.bytelist_to_latin_crlf_str(art_body)
-            if settings.use_redis:
-                # save in cache
-                try:
-                    self.redisclient.rpush(id0 + ":head", conv_head.encode("latin-1"))
-                    self.redisclient.rpush(id0 + ":body", conv_body.encode("latin-1"))
-                except Exception as e:
-                    self.logger.error(str(e) + ": redis push error")
-            return id0, conv_head.encode("latin-1"), conv_body.encode("latin-1"), "file-db"
-        else:
-            if settings.do_forwarding:
-                art_head, art_body = self.forward_get_article(id0)
-                if not art_head:
-                    return id0, None, None
-                self.logger.debug(id0 + " found on forwarding news server!")
-                # convert b'' to CRLF separated string
-                art_body0 = self.bytelist_to_latin_crlf_str(art_body)
-                art_head0 = self.bytelist_to_latin_crlf_str(art_head)
+                f.close()
+                self.logger.debug(id0 + " found in db!")
+                conv_head = self.bytelist_to_latin_crlf_str(art_head)
+                conv_body = self.bytelist_to_latin_crlf_str(art_body)
                 if settings.use_redis:
                     # save in cache
                     try:
-                        self.redisclient.rpush(id0 + ":head", art_head0.encode("latin-1"))
-                        self.redisclient.rpush(id0 + ":body", art_body0.encode("latin-1"))
+                        self.redisclient.rpush(id0 + ":head", conv_head.encode("latin-1"))
+                        self.redisclient.rpush(id0 + ":body", conv_body.encode("latin-1"))
                     except Exception as e:
                         self.logger.error(str(e) + ": redis push error")
-                # write to file in db dir
+                return id0, conv_head.encode("latin-1"), conv_body.encode("latin-1"), "file-db"
+        # finally on forwarding server
+        if settings.do_forwarding:
+            art_head, art_body = self.forward_get_article(id0)
+            if not art_head:
+                return id0, None, None
+            self.logger.debug(id0 + " found on forwarding news server!")
+            # convert b'' to CRLF separated string
+            art_body0 = self.bytelist_to_latin_crlf_str(art_body)
+            art_head0 = self.bytelist_to_latin_crlf_str(art_head)
+            if settings.use_redis:
+                # save in cache
+                try:
+                    self.redisclient.rpush(id0 + ":head", art_head0.encode("latin-1"))
+                    self.redisclient.rpush(id0 + ":body", art_body0.encode("latin-1"))
+                except Exception as e:
+                    self.logger.error(str(e) + ": redis push error")
+            # write to file in db dir
+            if settings.savefiles:
                 try:
                     f = open(DB_DIR + id0, "wb")
                     data0 = [ah.decode("latin-1") for ah in art_head]
@@ -369,7 +371,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                     f.close()
                 except Exception as e:
                     self.logger.error(str(e) + ": write to file error")
-                return id0, art_head0.encode("latin-1"), art_body0.encode("latin-1"), "forwarding-host"
+            return id0, art_head0.encode("latin-1"), art_body0.encode("latin-1"), "forwarding-host"
         return id0, None, None
 
     def bytelist_to_latin_crlf_str(self, bytelist0):

@@ -1,3 +1,6 @@
+# options
+savefiles = False
+
 # debug
 debug_level = "debug"
 
