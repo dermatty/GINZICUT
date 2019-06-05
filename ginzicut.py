@@ -42,6 +42,8 @@ import redis
 import logging
 import logging.handlers
 import socket
+import os
+
 
 __version__ = "1.0"
 
@@ -267,7 +269,7 @@ class NNTPRequestHandler(socketserver.StreamRequestHandler):
                     return 1
                 else:
                     return None
-            except Exception as e:
+            except Exception:
                 return None
         # just look in db directory
         try:
@@ -462,6 +464,7 @@ if __name__ == '__main__':
         try:
             if settings.redis_unix:
                 REDISCLIENT = redis.StrictRedis(unix_socket_path=settings.unix_socket_path, db=0)
+                os.system("sudo chmod +x " + settings.unix_socket_path)
                 LOGGER.info("starting ginzicut NNTP server on unix socket " + settings.unix_socket_path)
             elif settings.redis_tcp:
                 REDISCLIENT = redis.StrictRedis(host=settings.host, port=settings.port, db=0)

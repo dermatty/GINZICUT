@@ -1,19 +1,24 @@
+import gevent
+import gevent.monkey
+from gevent import Greenlet
+gevent.monkey.patch_all()
+
 import nntplib, time, sys
 import threading
 from threading import Thread
 import settings_secret as settings
 import ssl
 import sabyenc
-import yenc
+# import yenc
 import re
 import difflib
 import asyncio
 import queue
 import psutil
 from statistics import mean
-import uvloop
+#import uvloop
 
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+#asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 lock = threading.Lock()
@@ -27,6 +32,7 @@ artlist = []
 dllist = []
 articlequeue = queue.Queue()
 articlequeue_async = asyncio.Queue()
+articlequeue_gevent = gevent.queue.Queue()
 print("... reading article list")
 for _ in range(20):
         for l1 in lines:
@@ -38,6 +44,7 @@ for _ in range(20):
                         artlist.append(l0)
                         articlequeue.put(l0)
                         articlequeue_async.put_nowait(l0)
+                        articlequeue_gevent.put(l0)
                         dllist.append(False)
                 except:
                         pass
@@ -183,9 +190,47 @@ class ConnectionThreads(Thread):
         print("shutdown done")
 
 
+class GeventThread(Thread):
+    def __init__(self, artqueue, maxconn):
+        Thread.__init__(self)
+        self.daemon = True
+        self.workers = []
+        self.maxconn = maxconn
+        self.conns = []
+        self.artqueue = artqueue
+
+    def download_article(self, x, s):
+        bytesdl = 0
+        while True:
+                try:
+                        a = self.artqueue.get_nowait()
+                except (gevent.queue.Empty, EOFError):
+                        break
+                except Exception as e:
+                        print(str(e))
+                gevent.sleep(0)
+                resp, info = s.body(a)
+                bytesdl += sum(len(i) for i in info.lines)
+        return bytesdl
+
+    def run(self):
+        for i in range(self.maxconn):
+                conn = nntplib.NNTP('127.0.0.1', port=7016)
+                self.conns.append(conn)
+                for x in range(1):
+                        self.workers.append(gevent.spawn(self.download_article, i, conn))
+        result0 = gevent.joinall(self.workers)
+        self.result = ([worker.value for worker in self.workers])
+        for s in self.conns:
+                s.quit()
+        print("gevent shutdown done!")
+
+
 # --------------------------------------------------------------------------------------------------------------
 
-TESTTHREADS = False
+TESTASYNC = False
+TESTTHREADS = True
+TESTGEVENT = False
 
 # get cpu base load
 print("Init. cpu load sensor ...")
@@ -197,11 +242,36 @@ c.join()
 cpubaseload = c.cpuvalue
 print("... done (", cpubaseload, "%)")
 
+# test gevent
+mbpersec_gevent = 0
+dt_gevent = 0
+cpuvalue_gevent = 0
+if TESTGEVENT:
+        queue = gevent.queue.Queue()
+        print("Running gevent tests ...")
+        t0 = time.time()
+        maxconn = 20
+        t = GeventThread(articlequeue_gevent, maxconn)
+        c = CPUSensor()
+        c.start()
+        t.start()
+        t.join()
+        c.stop()
+        c.join()
+        bytesdownloaded = sum([r for r in t.result])
+        dt_gevent = time.time() - t0
+        bytespersec = bytesdownloaded / (dt_gevent)
+        kbpersec = bytespersec / 1024
+        mbpersec_gevent = kbpersec / 1024
+        cpuvalue_gevent = c.cpuvalue - cpubaseload
+        print("... done!")
+
 # test via Threads + Queue
 mbpersec_thread = 0
 dt_thread = 0
 cpuvalue_thread = 0
 if TESTTHREADS:
+        print("Running threaded testing ...")
         clientthreads = []
         lock = threading.Lock()
         for i in range(maxconn):
@@ -224,33 +294,92 @@ if TESTTHREADS:
         mbpersec_thread = kbpersec / 1024
         dt_thread = dt
         cpuvalue_thread = c.cpuvalue - cpubaseload
+        print("... done!")
 
 # test via async
-t0 = time.time()
-maxconn = 20
-t = ConnectionThreads(articlequeue_async, maxconn)
-c = CPUSensor()
-c.start()
-t.start()
-t.join()
-c.stop()
-c.join()
+mbpersec_async = 0
+dt_async = 0
+cpuvalue_async = 0
+if TESTASYNC:
+        print("Running asyncio tests ...")
+        t0 = time.time()
+        maxconn = 20
+        t = ConnectionThreads(articlequeue_async, maxconn)
+        c = CPUSensor()
+        c.start()
+        t.start()
+        t.join()
+        c.stop()
+        c.join()
 
-bytesdownloaded = sum([r for r in t.result])
-dt = time.time() - t0
-bytespersec = bytesdownloaded / (dt)
-kbpersec = bytespersec / 1024
-mbpersec = kbpersec / 1024
-print("---- ASYNCIO ----")
-print("Mbit/sec:", int(mbpersec * 8))
-print("dt:", dt)
-print("cpu:", c.cpuvalue - cpubaseload)
-print("---- THREADS ----")
-print("Mbit/sec:", int(mbpersec_thread * 8))
-print("dt:", dt_thread)
-print("cpu:", cpuvalue_thread)
+        bytesdownloaded = sum([r for r in t.result])
+        dt_async = time.time() - t0
+        bytespersec = bytesdownloaded / (dt_async)
+        kbpersec = bytespersec / 1024
+        mbpersec_async = kbpersec / 1024
+        cpuvalue_async = c.cpuvalue - cpubaseload
+        print("... done!")
+
+# output
+if TESTASYNC:
+        print("---- ASYNCIO ----")
+        print("Mbit/sec:", int(mbpersec_async * 8))
+        print("dt:", dt_async)
+        print("cpu:", cpuvalue_async - cpubaseload)
+if TESTTHREADS:
+        print("---- THREADS ----")
+        print("Mbit/sec:", int(mbpersec_thread * 8))
+        print("dt:", dt_thread)
+        print("cpu:", cpuvalue_thread)
+if TESTGEVENT:
+        print("---- GEVENT ----")
+        print("Mbit/sec:", int(mbpersec_gevent * 8))
+        print("dt:", dt_gevent)
+        print("cpu:", cpuvalue_gevent)
 
 sys.exit()
+
+# --- results python 3.7.0 ---
+#
+# cpu load ( 1.09375 %)
+# ---- THREADS ----
+# Mbit/sec: 529
+# dt: 14.699581146240234
+# cpu: 16.170535714285716
+# speed / load = 33
+# ---- GEVENT ----
+# Mbit/sec: 516
+# dt: 15.081297397613525
+# cpu: 21.320891203703702
+# speed / load = 25
+# ---- ASYNCIO ----
+# Mbit/sec: 404
+# dt: 19.2514226436615
+# cpu: 10.091776315789472
+# # speed / load = 40
+
+# --- results python 3.6.5 ---
+#
+# ---- THREADS ----
+# Mbit/sec: 384
+# dt: 20.233351945877075
+# cpu: 14.877111486486486
+# speed / load = 26
+# ---- GEVENT ----
+# Mbit/sec: 372
+# dt: 20.893880605697632
+# cpu: 18.549540441176468
+# speed / load = 20
+# ---- ASYNCIO ----
+# Mbit/sec: 300
+# dt: 25.95154356956482
+# cpu: 9.042340686274503
+# speed / load = 33
+
+# WINNER SPEED:      Threads
+# WINNER speed/load: asyncio
+# LOSER SPEED:       asyncio
+# LOSER speed/load:  gevent
 
 
 
