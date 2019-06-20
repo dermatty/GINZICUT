@@ -548,6 +548,7 @@ def run():
     print("ginzicut running now, press Ctrl-C to stop!")
     SERVER_THREAD.start()
     SERVER_THREAD.join()
+    SERVER.server_close()
     print("ByeBye!")
     return 0
 
