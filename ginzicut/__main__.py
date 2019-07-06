@@ -460,6 +460,8 @@ def run():
     global REDISCLIENT
     global LOGGER
 
+    INSTALL_DIR = os.path.dirname(os.path.realpath(__file__))
+
     # read / create dirs + config file
     ginzicut_dir = expanduser("~") + "/.ginzicut/"
     DB_DIR = ginzicut_dir + "db/"
@@ -467,7 +469,7 @@ def run():
     if not os.path.exists(ginzicut_dir):
         try:
             os.mkdir(ginzicut_dir)
-            shutil.copy("./files/ginzicut_settings.py", ginzicut_dir + "ginzicut_settings.py")
+            shutil.copy(INSTALL_DIR + "/config/ginzicut_settings.py", ginzicut_dir + "ginzicut_settings.py")
             os.mkdir(DB_DIR)
             os.mkdir(LOG_DIR)
             print("/home/$USER/.ginzicut dir initialized, new please edit ginzicut_settings.py to your likes ...")
