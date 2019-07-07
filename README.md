@@ -8,22 +8,26 @@ Copyright (c) 2018 Stephan Untergrabner, 2002 Joao Prado Maia <jpm@impleo.net>
      
 
 
+GINZICUT requires python >= 3.7.2 !!!
+
+
 INSTALL:
 
-	a. Local Install
+	A. in virtual environments:
 
-	- clone this repo & unpack
-	- cd to directory of repo
-	- activate virtual environment (e.g. workon venv1)
-	- pip install .
+		create/activate virtual environment
 
+		a. Easiest: from PyPi	
+		- pip install ginzicut
 
-	b. Install directly from github with pip
-	
-	- pip install git+https://github.com/dermatty/GINZICUT.git#egg=ginzicut
+		b. Install directly from github with pip
+		- pip install git+https://github.com/dermatty/GINZICUT.git#egg=ginzicut
 
-	
-	c. from PyPi
-	
-	- pip install ginzicut
+		a. Local Install
+		- clone this repo & unpack
+		- cd to directory of repo
+		- pip install .
+
+	B. for a dedicated user:
+		python3.7 -m pip install --user ginzicut
 
