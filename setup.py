@@ -3,7 +3,7 @@ import sys
 
 from setuptools import find_packages, setup
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 setup(
     name="Ginzicut",
@@ -14,8 +14,9 @@ setup(
     url="https://github.com/dermatty/GINZICUT",
     platforms="posix",
     packages=find_packages(),
-    package_data={'ginzicut': ['config/ginzicut_settings.py']},                   # for pip
-    data_files=[('ginzicut/config', ['ginzicut/config/ginzicut_settings.py'])],   # for setup.py install
+    include_package_data=True,
+    #package_data={'ginzicut': ['config/ginzicut_settings.py']},                   # for pip
+    #data_files=[('ginzicut/config', ['ginzicut/config/ginzicut_settings.py'])],   # for setup.py install
     entry_points={"console_scripts": ["ginzicut = ginzicut.__main__:run"]},
     install_requires=["redis>=3.2.0"],
     keywords=["usenet", "nntp"],
