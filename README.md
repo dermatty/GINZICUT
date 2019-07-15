@@ -13,7 +13,7 @@ GINZICUT requires python >= 3.7.2 !!!
 
 INSTALL:
 
-	A. in virtual environments:
+	A. distutils - in virtual environments:
 
 		create/activate virtual environment
 
@@ -28,6 +28,9 @@ INSTALL:
 		- cd to directory of repo
 		- pip install .
 
-	B. for a dedicated user:
+	B. distutils - for a dedicated user:
 		python3.7 -m pip install --user ginzicut
 
+    C. Gentoo ebuild
+        - add dermatty_overlay with layman (see overlay github site for instructions)
+        - emerge -a ginzicut
