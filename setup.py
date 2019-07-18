@@ -3,7 +3,7 @@ import sys
 
 from setuptools import find_packages, setup
 
-VERSION = "1.3"
+VERSION = "1.4"
 
 setup(
     name="Ginzicut",
@@ -20,9 +20,10 @@ setup(
     entry_points={"console_scripts": ["ginzicut = ginzicut.__main__:run"]},
     install_requires=["redis>=3.2.0"],
     keywords=["usenet", "nntp"],
-    python_requires=">=3.7.1",
+    python_requires=">=3.6.1",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Environment :: Console",
         "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.6",
     ])

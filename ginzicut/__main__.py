@@ -1,4 +1,4 @@
-#!/home/stephan/.virtualenvs/gzbx/bin/python
+#!/usr/bin/env python3
 
 ''' GINZICUT: Test server for ginzibix
     (c) 2018 Stephan Untergrabner <stephan@untergrabner.at>
